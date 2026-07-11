@@ -1,6 +1,3 @@
-https://raw.githubusercontent.com/Darklessing/catvod/refs/heads/main/xuenai/index.js.md5
-https://raw.githubusercontent.com/4TVBox/Cat/refs/heads/main/index.js.md5
-https://raw.githubusercontent.com/Darklessing/catvod/refs/heads/main/douer/index.js.md5
 https://raw.githubusercontent.com/guot55/yg/main/pro.json
 https://raw.githubusercontent.com/guot55/YGBH/main/pro.json
 https://raw.githubusercontent.com/lege0001/TVbox/main/TV/dj.json
