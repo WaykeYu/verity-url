@@ -14,8 +14,8 @@ Part 1 - 強化版 (含代理解包)
 ✓ 多執行緒準備
 ✓ 去除空白行
 ✓ 去除無網址行
-✓ 🆕 代理網址解包（提取真實網址）
-✓ 🆕 自動還原被代理的URL
+✓ 代理網址解包（提取真實網址）
+✓ 自動還原被代理的URL
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ OUTPUT_FILE = cfg.get("output", "data/source_clean.txt")
 INVALID_FILE = cfg.get("invalid", "data/invalid_urls.txt")
 DUPLICATE_FILE = cfg.get("duplicate", "data/duplicate_urls.txt")
 PROXY_FILE = cfg.get("proxy", "data/proxy_urls.txt")
-UNPROXY_FILE = cfg.get("unproxy", "data/unproxy_urls.txt")  # 🆕 解包後的URL
+UNPROXY_FILE = cfg.get("unproxy", "data/unproxy_urls.txt")
 REPORT_FILE = cfg.get("report", "data/report.md")
 MAX_WORKERS = cfg.get("workers", 50)
 TIMEOUT = cfg.get("timeout", 8)
@@ -53,9 +53,9 @@ RETRY = cfg.get("retry", 3)
 BACKUP_ENABLED = cfg.get("backup", True)
 HISTORY_DIR = cfg.get("history", "data/history")
 
-# 🆕 代理解包設定
-PROXY_UNPACK_ENABLED = cfg.get("proxy_unpack", True)  # 啟用代理解包
-PROXY_UNPACK_DEPTH = cfg.get("proxy_unpack_depth", 3)  # 最大解包深度
+# 代理解包設定
+PROXY_UNPACK_ENABLED = cfg.get("proxy_unpack", True)
+PROXY_UNPACK_DEPTH = cfg.get("proxy_unpack_depth", 3)
 
 USER_AGENT = (
     "Mozilla/5.0 "
@@ -85,9 +85,8 @@ INVALID_KEYWORDS = [
     "<html",
 ]
 
-# 🆕 代理服務特徵（用於識別和提取真實URL）
+# 代理服務特徵（用於識別和提取真實URL）
 PROXY_SERVICES = {
-    # 服務名稱: (檢測模式, URL參數名)
     "scrapeops": (r"scrapeops\.io", "url"),
     "oxylabs": (r"oxylabs\.io", "url"),
     "brightdata": (r"brightdata\.com|luminati\.io", "url"),
@@ -103,7 +102,7 @@ PROXY_SERVICES = {
     "scraperapi": (r"scraperapi\.com", "url"),
 }
 
-# 🆕 通用代理參數名稱
+# 通用代理參數名稱
 PROXY_PARAMS = [
     "url",
     "target",
@@ -133,9 +132,9 @@ class CheckResult:
     """單一 URL 檢查結果"""
     url: str
     is_valid: bool
-    original_url: Optional[str] = None  # 🆕 原始代理網址
-    unpacked_url: Optional[str] = None  # 🆕 解包後的網址
-    unpack_depth: int = 0  # 🆕 解包深度
+    original_url: Optional[str] = None
+    unpacked_url: Optional[str] = None
+    unpack_depth: int = 0
     is_proxy: bool = False
     proxy_type: Optional[str] = None
     status_code: Optional[int] = None
@@ -151,7 +150,7 @@ class LineResult:
     invalid_urls: List[str] = field(default_factory=list)
     duplicate_urls: List[str] = field(default_factory=list)
     proxy_urls: List[str] = field(default_factory=list)
-    unpacked_urls: List[str] = field(default_factory=list)  # 🆕 解包後的URL
+    unpacked_urls: List[str] = field(default_factory=list)
 
 # ============================================================================
 # URL 解包器
@@ -162,9 +161,9 @@ class URLUnpacker:
     
     def __init__(self):
         self.proxy_patterns = self._compile_proxy_patterns()
-        self.unpacked_cache: Dict[str, Tuple[str, int]] = {}  # 快取解包結果
+        self.unpacked_cache: Dict[str, Tuple[str, int]] = {}
     
-    def _compile_proxy_patterns(self) -> Dict[str, re.Pattern]:
+    def _compile_proxy_patterns(self) -> Dict[str, Dict]:
         """編譯代理服務模式"""
         patterns = {}
         for service, (pattern, param) in PROXY_SERVICES.items():
@@ -175,12 +174,7 @@ class URLUnpacker:
         return patterns
     
     def unpack_url(self, url: str, depth: int = 0, max_depth: int = 3) -> Tuple[str, int, bool]:
-        """
-        解包代理網址，提取真實目標URL
-        
-        Returns:
-            (真實URL, 解包深度, 是否成功解包)
-        """
+        """解包代理網址，提取真實目標URL"""
         if not PROXY_UNPACK_ENABLED:
             return url, 0, False
         
@@ -217,12 +211,11 @@ class URLUnpacker:
             for param in PROXY_PARAMS:
                 if param in params:
                     real_url = params[param][0]
-                    real_url = unquote(real_url)  # URL解碼
+                    real_url = unquote(real_url)
                     if self._is_valid_url(real_url):
                         return real_url
             
             # 方法2: 通過路徑提取
-            # 某些代理使用 /proxy/http://example.com 格式
             path_patterns = [
                 r'/proxy/(https?://[^\s/]+.*)',
                 r'/proxies/(https?://[^\s/]+.*)',
@@ -246,7 +239,6 @@ class URLUnpacker:
             domain = parsed.netloc.lower()
             for service, info in self.proxy_patterns.items():
                 if info['pattern'].search(domain):
-                    # 嘗試從查詢參數中提取
                     param = info['param']
                     if param in params:
                         real_url = unquote(params[param][0])
@@ -254,11 +246,9 @@ class URLUnpacker:
                             return real_url
             
             # 方法4: 提取URL編碼的完整URL
-            # 有些代理會將整個URL進行編碼
             if parsed.path and '%3A' in parsed.path or '%2F' in parsed.path:
                 try:
                     decoded_path = unquote(parsed.path)
-                    # 嘗試提取HTTP/HTTPS URL
                     url_match = re.search(r'https?://[^\s<>"\']+', decoded_path)
                     if url_match:
                         real_url = url_match.group(0)
@@ -288,12 +278,10 @@ class URLUnpacker:
             parsed = urlparse(url)
             domain = parsed.netloc.lower()
             
-            # 檢查代理服務
             for service, info in self.proxy_patterns.items():
                 if info['pattern'].search(domain):
                     return service
             
-            # 檢查查詢參數中的代理特徵
             params = parse_qs(parsed.query)
             for param in PROXY_PARAMS:
                 if param in params:
@@ -316,7 +304,7 @@ class URLChecker:
         self.invalid = 0
         self.duplicate = 0
         self.proxy_count = 0
-        self.unpacked_count = 0  # 🆕 成功解包的數量
+        self.unpacked_count = 0
         self.empty_lines = 0
         self.no_url_lines = 0
         
@@ -324,7 +312,7 @@ class URLChecker:
         self.invalid_urls: List[str] = []
         self.duplicate_urls: List[str] = []
         self.proxy_urls: List[str] = []
-        self.unpacked_urls: List[str] = []  # 🆕 解包後的URL
+        self.unpacked_urls: List[str] = []
         self.url_status: Dict[str, bool] = {}
         
         # 建立 Session
@@ -340,7 +328,7 @@ class URLChecker:
         self.session.mount('http://', adapter)
         self.session.mount('https://', adapter)
         
-        # 🆕 初始化解包器
+        # 初始化解包器
         self.unpacker = URLUnpacker()
 
     # ========================================================================
@@ -367,7 +355,6 @@ class URLChecker:
         if BACKUP_ENABLED and output_path.exists():
             self._backup_file(output_path)
         
-        # 過濾空白行和無網址行
         filtered_lines = []
         url_pattern = re.compile(r'https?://[^\s<>"\']+')
         
@@ -423,7 +410,6 @@ class URLChecker:
                 encoding="utf-8"
             )
 
-    # 🆕 儲存解包後的URL
     def save_unpacked(self) -> None:
         """儲存解包後的URL"""
         if self.unpacked_urls:
@@ -441,29 +427,19 @@ class URLChecker:
         return URL_PATTERN.findall(line)
 
     def process_url(self, url: str) -> Optional[CheckResult]:
-        """
-        處理單個 URL：
-        1. 檢測是否為代理網址
-        2. 如果是，嘗試解包獲取真實URL
-        3. 檢查重複
-        4. 檢查有效性
-        """
+        """處理單個 URL"""
         self.total += 1
         
-        # 🆕 檢測代理並嘗試解包
         proxy_type = self.unpacker.get_proxy_type(url)
         is_proxy = proxy_type is not None
         
         if is_proxy and PROXY_UNPACK_ENABLED:
-            # 嘗試解包
             real_url, depth, unpacked = self.unpacker.unpack_url(url, max_depth=PROXY_UNPACK_DEPTH)
             
             if unpacked and real_url:
-                # 成功解包，使用真實URL
                 self.unpacked_count += 1
                 self.unpacked_urls.append(real_url)
                 
-                # 檢查解包後的URL是否重複
                 if real_url in self.seen_urls:
                     self.duplicate += 1
                     self.duplicate_urls.append(real_url)
@@ -480,7 +456,6 @@ class URLChecker:
                 
                 self.seen_urls.add(real_url)
                 
-                # 檢查解包後的URL有效性
                 is_valid = self.check_url(real_url)
                 if is_valid:
                     self.valid += 1
@@ -507,7 +482,6 @@ class URLChecker:
                         error_message="解包後URL無效"
                     )
             else:
-                # 無法解包，記錄為代理但不過濾
                 self.proxy_count += 1
                 self.proxy_urls.append(url)
                 return CheckResult(
@@ -518,12 +492,10 @@ class URLChecker:
                     error_message="無法解包代理URL"
                 )
         
-        # 非代理URL的正常處理
         if is_proxy:
             self.proxy_count += 1
             self.proxy_urls.append(url)
         
-        # 檢查重複
         if url in self.seen_urls:
             self.duplicate += 1
             self.duplicate_urls.append(url)
@@ -537,7 +509,6 @@ class URLChecker:
         
         self.seen_urls.add(url)
         
-        # 檢查有效性
         if url in self.url_status:
             is_valid = self.url_status[url]
         else:
@@ -572,7 +543,6 @@ class URLChecker:
         if PROXY_UNPACK_ENABLED:
             print(f"🔄 代理解包已啟用 (最大深度: {PROXY_UNPACK_DEPTH})")
         
-        # 準備所有任務
         for line_num, line in enumerate(lines, 1):
             urls = self.extract_urls(line)
             
@@ -601,7 +571,6 @@ class URLChecker:
         
         print(f"  ⏳ 等待所有檢查完成...")
         
-        # 收集所有任務結果
         processed_urls: Set[str] = set()
         
         for future, url, line_result in all_tasks:
@@ -611,22 +580,18 @@ class URLChecker:
                     processed_urls.add(url)
                     
                     if result.is_proxy and result.unpacked_url:
-                        # 🆕 代理被成功解包，使用解包後的URL
                         if result.is_valid:
                             line_result.unpacked_urls.append(result.unpacked_url)
                             line_result.valid_urls.append(result.unpacked_url)
-                            # 替換行中的代理URL為真實URL
                             line_result.cleaned_line = line_result.cleaned_line.replace(
                                 url, result.unpacked_url
                             )
                         else:
                             line_result.invalid_urls.append(result.unpacked_url)
-                            # 移除無效的解包URL
                             line_result.cleaned_line = line_result.cleaned_line.replace(
                                 url, ""
                             )
                     elif result.is_proxy:
-                        # 代理但無法解包，記錄但不保留
                         line_result.proxy_urls.append(url)
                         line_result.cleaned_line = line_result.cleaned_line.replace(url, "")
                     elif result.is_valid:
@@ -644,19 +609,17 @@ class URLChecker:
         
         print(f"  ✅ 完成所有檢查")
         
-        # 清理行結果
         cleaned_lines = []
         for result in line_results:
             cleaned = re.sub(r'\s+', ' ', result.cleaned_line).strip()
             if cleaned:
                 cleaned_lines.append(cleaned)
         
-        # 儲存結果
         self.save(cleaned_lines)
         self.save_invalid()
         self.save_duplicate()
         self.save_proxy()
-        self.save_unpacked()  # 🆕 儲存解包後的URL
+        self.save_unpacked()
         self.generate_report()
 
     def _submit_check_task(self, url: str):
@@ -672,7 +635,6 @@ class URLChecker:
         """檢查網址是否有效"""
         for attempt in range(RETRY):
             try:
-                # 先嘗試 HEAD 請求
                 try:
                     head_response = self.session.head(
                         url,
@@ -685,7 +647,6 @@ class URLChecker:
                 except Exception:
                     pass
                 
-                # 使用 GET 獲取內容
                 response = self.session.get(
                     url,
                     timeout=TIMEOUT,
@@ -699,14 +660,12 @@ class URLChecker:
                     }
                 )
                 
-                # 檢查狀態碼
                 if response.status_code >= 400:
                     if attempt < RETRY - 1:
                         time.sleep(0.5 * (attempt + 1))
                         continue
                     return False
                 
-                # 檢查內容長度
                 content_length = response.headers.get('content-length')
                 if content_length and int(content_length) < 100:
                     if attempt < RETRY - 1:
@@ -714,10 +673,8 @@ class URLChecker:
                         continue
                     return False
                 
-                # 讀取部分內容進行驗證
                 content = self._read_content(response)
                 
-                # 驗證內容
                 if self.validate_content(url, content):
                     return True
                 
@@ -732,7 +689,7 @@ class URLChecker:
                     requests.exceptions.ProxyError,
                     requests.exceptions.RequestException,
                     socket.gaierror,
-                    socket.timeout) as e:
+                    socket.timeout):
                 if attempt < RETRY - 1:
                     time.sleep(0.5 * (attempt + 1))
                     continue
@@ -892,7 +849,6 @@ class URLChecker:
             "",
         ]
         
-        # 🆕 解包成功的URL
         if self.unpacked_urls:
             lines.extend([
                 "## 🔓 成功解包的URL",
@@ -907,7 +863,6 @@ class URLChecker:
             lines.append(f"完整清單請查看：`{UNPROXY_FILE}`")
             lines.append("")
         
-        # 代理網址列表
         if self.proxy_urls:
             lines.extend([
                 "## 🛡️ 無法解包的代理網址",
@@ -922,7 +877,6 @@ class URLChecker:
             lines.append(f"完整清單請查看：`{PROXY_FILE}`")
             lines.append("")
         
-        # 無效網址列表
         lines.extend([
             "## ❌ 無效網址列表",
             "",
@@ -987,3 +941,22 @@ if __name__ == "__main__":
         print(f"❌ 失效   : {checker.invalid}")
         print(f"🔄 重複   : {checker.duplicate}")
         print(f"🛡️ 代理   : {checker.proxy_count}")
+        print(f"🔓 解包   : {checker.unpacked_count}")
+        print(f"🧹 移除空白行 : {checker.empty_lines}")
+        print(f"🧹 移除無網址行 : {checker.no_url_lines}")
+        print(f"⏱️ 耗時   : {time.time() - start_time:.2f} 秒")
+        print("=" * 70)
+        print(f"\n📁 輸出檔案：")
+        print(f"  - 有效清單: {OUTPUT_FILE}")
+        print(f"  - 無效清單: {INVALID_FILE}")
+        print(f"  - 重複清單: {DUPLICATE_FILE}")
+        print(f"  - 代理清單: {PROXY_FILE}")
+        print(f"  - 解包清單: {UNPROXY_FILE}")
+        print(f"  - 檢查報告: {REPORT_FILE}")
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️ 使用者中斷執行")
+    except Exception as e:
+        print(f"\n❌ 錯誤：{e}")
+        import traceback
+        traceback.print_exc()
