@@ -3,15 +3,14 @@
 
 """
 TVBox URL Checker Pro v3
-網路優化版 - 針對 GitHub 代理服務優化
+源地址優先版 - 優先使用 GitHub 原始地址，代理作為備用
 
 改進重點：
-✓ 支援 GitHub 代理服務檢測
-✓ 智能重試策略（區分不同錯誤類型）
-✓ 代理服務健康檢查
-✓ 多重驗證機制
-✓ URL 重寫和備用方案
+✓ 優先使用 GitHub 原始地址 (raw.githubusercontent.com)
+✓ 代理服務作為備用方案
+✓ 智慧型 URL 重寫
 ✓ 詳細的診斷日誌
+✓ 內容快取機制
 """
 
 from __future__ import annotations
@@ -21,11 +20,11 @@ import shutil
 import socket
 import time
 import hashlib
-from typing import List, Tuple, Dict, Any, Optional, Set
-from urllib.parse import urlparse, urlunparse
+import random
+from typing import List, Tuple, Dict, Any, Optional
+from urllib.parse import urlparse
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import yaml
 
@@ -41,18 +40,12 @@ OUTPUT_FILE = cfg.get("output", "data/source_clean.txt")
 INVALID_FILE = cfg.get("invalid", "data/invalid_urls.txt")
 DUPLICATE_FILE = cfg.get("duplicate", "data/duplicate_urls.txt")
 REPORT_FILE = cfg.get("report", "data/report.md")
-MAX_WORKERS = cfg.get("workers", 20)  # 降低並發數避免被限制
-TIMEOUT = cfg.get("timeout", 15)      # 增加超時時間
+MAX_WORKERS = cfg.get("workers", 20)
+TIMEOUT = cfg.get("timeout", 15)
 RETRY = cfg.get("retry", 3)
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/119.0.0.0 Safari/537.36"
-)
-
 # ============================================================================
-# GitHub 代理服務配置
+# GitHub 代理服務配置（備用）
 # ============================================================================
 
 GITHUB_PROXIES = [
@@ -60,161 +53,198 @@ GITHUB_PROXIES = [
     "https://ghproxy.net",
     "https://mirror.ghproxy.com",
     "https://gh.api.99988866.xyz",
-    "https://git.yumenaka.net",
 ]
 
-class GitHubProxyManager:
-    """GitHub 代理服務管理器"""
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+]
+
+# ============================================================================
+# URL 工具函數
+# ============================================================================
+
+def extract_github_raw_url(url: str) -> Optional[str]:
+    """
+    從各種 GitHub URL 格式中提取原始 raw 地址
     
-    def __init__(self):
-        self.proxies = GITHUB_PROXIES
-        self.healthy_proxies = []
-        self.proxy_cache = {}
-        self.last_check = 0
-        self.check_interval = 300  # 5分鐘檢查一次
-        
-    def get_proxy(self, url: str) -> str:
-        """獲取可用的代理 URL"""
-        # 如果不是 GitHub URL，直接返回原 URL
-        if 'github.com' not in url and 'raw.githubusercontent.com' not in url:
-            return url
-        
-        # 檢查是否已經是代理 URL
-        for proxy in self.proxies:
-            if url.startswith(proxy):
-                return url
-        
-        # 嘗試獲取可用的代理
-        available_proxies = self._get_healthy_proxies()
-        if available_proxies:
-            # 將原始 GitHub URL 轉換為代理 URL
-            return self._convert_to_proxy_url(url, available_proxies[0])
-        
-        # 如果沒有可用代理，返回原始 URL
+    支援格式：
+    1. https://raw.githubusercontent.com/... (已是原始地址)
+    2. https://github.com/.../raw/... (GitHub raw 地址)
+    3. https://gh-proxy.org/https://raw.githubusercontent.com/... (代理地址)
+    4. https://gh-proxy.org/https://github.com/.../raw/... (代理地址)
+    """
+    # 如果已經是 raw.githubusercontent.com，直接返回
+    if 'raw.githubusercontent.com' in url:
         return url
     
-    def _get_healthy_proxies(self) -> List[str]:
-        """獲取健康的代理列表"""
-        current_time = time.time()
-        
-        # 如果快取未過期，直接返回
-        if current_time - self.last_check < self.check_interval:
-            return self.healthy_proxies
-        
-        # 檢查所有代理
-        self.healthy_proxies = []
-        for proxy in self.proxies:
-            if self._check_proxy_health(proxy):
-                self.healthy_proxies.append(proxy)
-        
-        self.last_check = current_time
-        return self.healthy_proxies
+    # 檢查是否為代理 URL，嘗試提取原始地址
+    for proxy in GITHUB_PROXIES:
+        if url.startswith(proxy):
+            # 移除代理前綴
+            remaining = url[len(proxy):]
+            # 移除開頭的 /
+            if remaining.startswith('/'):
+                remaining = remaining[1:]
+            
+            # 檢查是否包含 raw.githubusercontent.com
+            if 'raw.githubusercontent.com' in remaining:
+                # 確保有 https:// 前綴
+                if remaining.startswith('https://'):
+                    return remaining
+                else:
+                    return f"https://{remaining}"
+            
+            # 檢查是否包含 github.com/.../raw/...
+            if 'github.com' in remaining and '/raw/' in remaining:
+                # 轉換為 raw.githubusercontent.com 格式
+                # 例如: github.com/niuber/niuber/raw/refs/heads/main/... 
+                # 轉換為: raw.githubusercontent.com/niuber/niuber/refs/heads/main/...
+                github_match = re.search(r'github\.com/([^/]+/[^/]+)/raw/(.+)', remaining)
+                if github_match:
+                    user_repo = github_match.group(1)
+                    path = github_match.group(2)
+                    return f"https://raw.githubusercontent.com/{user_repo}/{path}"
     
-    def _check_proxy_health(self, proxy: str) -> bool:
-        """檢查代理是否健康"""
-        test_url = f"{proxy}/https://raw.githubusercontent.com/niuber/niuber/refs/heads/main/tvbox/TVBoxOSC/tvbox/api.json"
-        
-        try:
-            response = requests.head(
-                test_url,
-                timeout=5,
-                allow_redirects=True,
-                headers={"User-Agent": USER_AGENT}
-            )
-            return response.status_code < 400
-        except:
-            return False
+    # 檢查是否為 github.com/.../raw/... 格式
+    github_raw_match = re.search(r'github\.com/([^/]+/[^/]+)/raw/(.+)', url)
+    if github_raw_match:
+        user_repo = github_raw_match.group(1)
+        path = github_raw_match.group(2)
+        return f"https://raw.githubusercontent.com/{user_repo}/{path}"
     
-    def _convert_to_proxy_url(self, original_url: str, proxy: str) -> str:
-        """將 GitHub URL 轉換為代理 URL"""
-        # 如果是 raw.githubusercontent.com，轉換為代理格式
-        if 'raw.githubusercontent.com' in original_url:
-            path = original_url.replace('https://raw.githubusercontent.com', '')
-            return f"{proxy}/https://raw.githubusercontent.com{path}"
-        
-        # 如果是 github.com，轉換為代理格式
-        if 'github.com' in original_url:
-            path = original_url.replace('https://github.com', '')
-            return f"{proxy}/https://github.com{path}"
-        
-        return original_url
+    # 如果不是 GitHub URL，返回 None
+    if 'github.com' not in url and 'raw.githubusercontent.com' not in url:
+        return None
+    
+    return url
+
+def is_github_url(url: str) -> bool:
+    """判斷是否為 GitHub 相關 URL"""
+    url_lower = url.lower()
+    return 'github.com' in url_lower or 'raw.githubusercontent.com' in url_lower
+
+def get_github_proxy_alternatives(original_url: str) -> List[str]:
+    """生成 GitHub URL 的代理備用地址"""
+    alternatives = []
+    
+    # 如果是 raw URL，生成代理版本
+    if 'raw.githubusercontent.com' in original_url:
+        path = original_url.replace('https://raw.githubusercontent.com', '')
+        for proxy in GITHUB_PROXIES:
+            alternatives.append(f"{proxy}/https://raw.githubusercontent.com{path}")
+    
+    # 如果是普通 GitHub URL，生成 raw 版本和代理版本
+    elif 'github.com' in original_url and '/raw/' in original_url:
+        # 先轉換為 raw 地址
+        raw_url = extract_github_raw_url(original_url)
+        if raw_url and raw_url != original_url:
+            alternatives.append(raw_url)
+            # 再生成 raw 地址的代理版本
+            path = raw_url.replace('https://raw.githubusercontent.com', '')
+            for proxy in GITHUB_PROXIES:
+                alternatives.append(f"{proxy}/https://raw.githubusercontent.com{path}")
+    
+    return alternatives
 
 # ============================================================================
 # 智慧型 URL 檢查器
 # ============================================================================
 
 class SmartURLChecker:
-    """智慧型 URL 檢查器 - 針對代理服務優化"""
+    """智慧型 URL 檢查器 - 源地址優先"""
     
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": USER_AGENT})
+        self.session = self._create_session()
         
-        # 設定重試策略
-        retry_strategy = requests.adapters.Retry(
-            total=2,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504]
-        )
-        adapter = requests.adapters.HTTPAdapter(
-            pool_connections=MAX_WORKERS,
-            pool_maxsize=MAX_WORKERS,
-            max_retries=retry_strategy
-        )
-        self.session.mount('http://', adapter)
-        self.session.mount('https://', adapter)
-        
-        # 初始化代理管理器
-        self.proxy_manager = GitHubProxyManager()
+        # 快取機制
+        self.cache = {}
+        self.cache_ttl = 1800  # 30分鐘
         
         # 統計資料
         self.stats = {
-            'proxy_used': 0,
+            'raw_success': 0,
+            'raw_failed': 0,
+            'proxy_success': 0,
             'proxy_failed': 0,
-            'direct_success': 0,
-            'direct_failed': 0,
-            'retry_success': 0,
+            'cache_hit': 0,
+            'total_attempts': 0,
+            'urls_processed': 0,
         }
         
-        # 快取
-        self.cache = {}
-        self.cache_ttl = 1800  # 30分鐘
+        # 請求頭模板
+        self.base_headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+            "User-Agent": random.choice(USER_AGENTS),
+        }
+    
+    def _create_session(self) -> requests.Session:
+        """創建配置好的 Session"""
+        session = requests.Session()
+        
+        retry_strategy = requests.adapters.Retry(
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["HEAD", "GET"]
+        )
+        
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=MAX_WORKERS * 2,
+            pool_maxsize=MAX_WORKERS * 2,
+            max_retries=retry_strategy
+        )
+        
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        return session
 
     def check_url(self, url: str) -> Tuple[bool, Dict[str, Any]]:
         """
         智慧型檢查 URL
         策略：
-        1. 檢測 URL 類型
-        2. 如果是 GitHub URL，嘗試多種代理
-        3. 如果代理失敗，嘗試直接連接
-        4. 記錄詳細的診斷資訊
+        1. 檢查快取
+        2. 如果是 GitHub URL，優先使用原始 raw 地址
+        3. 如果 raw 地址失敗，嘗試代理備用
+        4. 一般 URL 使用標準檢查
         """
         result = {
             'url': url,
-            'status': False,
+            'valid': False,
             'method': '',
             'status_code': None,
             'response_time': None,
             'error': None,
-            'proxy_used': None,
-            'attempts': []
+            'url_used': url,
+            'attempts': [],
+            'content_preview': None,
+            'content_type': None,
         }
+        
+        self.stats['urls_processed'] += 1
         
         # 檢查快取
         cache_key = hashlib.md5(url.encode()).hexdigest()
         if cache_key in self.cache:
             cached_time, cached_result = self.cache[cache_key]
             if time.time() - cached_time < self.cache_ttl:
+                self.stats['cache_hit'] += 1
                 return cached_result[0], cached_result[1]
         
         # 判斷 URL 類型
-        url_type = self._detect_url_type(url)
+        is_github = is_github_url(url)
         
-        if url_type == 'github':
-            # GitHub URL 使用多策略檢查
+        if is_github:
+            # GitHub URL：優先使用原始 raw 地址
             is_valid, result = self._check_github_url(url, result)
         else:
-            # 一般 URL 使用標準檢查
+            # 一般 URL：標準檢查
             is_valid, result = self._check_normal_url(url, result)
         
         # 更新快取
@@ -222,91 +252,106 @@ class SmartURLChecker:
         
         return is_valid, result
     
-    def _detect_url_type(self, url: str) -> str:
-        """檢測 URL 類型"""
-        url_lower = url.lower()
-        if 'github.com' in url_lower or 'raw.githubusercontent.com' in url_lower:
-            return 'github'
-        elif 'gh-proxy' in url_lower or 'ghproxy' in url_lower:
-            return 'github_proxy'
-        else:
-            return 'normal'
-    
     def _check_github_url(self, url: str, result: Dict) -> Tuple[bool, Dict]:
-        """檢查 GitHub URL（多策略）"""
+        """檢查 GitHub URL（源地址優先）"""
         
-        # 策略 1: 嘗試使用代理
-        proxy_url = self.proxy_manager.get_proxy(url)
-        if proxy_url != url:
+        # 1. 嘗試提取原始 raw 地址
+        raw_url = extract_github_raw_url(url)
+        
+        if raw_url and raw_url != url:
+            result['method'] = 'raw'
+            result['url_used'] = raw_url
+            
+            is_valid, attempt_result = self._attempt_check(raw_url)
+            result['attempts'].append(attempt_result)
+            
+            if is_valid:
+                self.stats['raw_success'] += 1
+                result['valid'] = True
+                return True, result
+            else:
+                self.stats['raw_failed'] += 1
+                result['error'] = f"Raw 地址訪問失敗: {attempt_result.get('error', '未知錯誤')}"
+        
+        # 2. 如果 raw 地址失敗，嘗試原始 URL（如果不同的話）
+        if url != raw_url:
+            result['method'] = 'original'
+            result['url_used'] = url
+            
+            is_valid, attempt_result = self._attempt_check(url)
+            result['attempts'].append(attempt_result)
+            
+            if is_valid:
+                self.stats['raw_success'] += 1
+                result['valid'] = True
+                return True, result
+        
+        # 3. 嘗試代理備用地址
+        proxy_alternatives = get_github_proxy_alternatives(url)
+        for proxy_url in proxy_alternatives:
+            if proxy_url in [a.get('url_used') for a in result['attempts']]:
+                continue
+            
             result['method'] = 'proxy'
-            result['proxy_used'] = proxy_url
+            result['url_used'] = proxy_url
             
             is_valid, attempt_result = self._attempt_check(proxy_url)
             result['attempts'].append(attempt_result)
             
             if is_valid:
-                self.stats['proxy_used'] += 1
-                return True, result
-        
-        # 策略 2: 嘗試直接連接原始 URL
-        # 提取原始 GitHub URL
-        original_url = self._extract_original_github_url(url)
-        if original_url:
-            result['method'] = 'direct'
-            is_valid, attempt_result = self._attempt_check(original_url)
-            result['attempts'].append(attempt_result)
-            
-            if is_valid:
-                self.stats['direct_success'] += 1
+                self.stats['proxy_success'] += 1
+                result['valid'] = True
                 return True, result
             else:
-                self.stats['direct_failed'] += 1
-        
-        # 策略 3: 嘗試其他代理
-        for proxy in GITHUB_PROXIES:
-            if proxy == result.get('proxy_used'):
-                continue
-            
-            test_url = self.proxy_manager._convert_to_proxy_url(url, proxy)
-            if test_url:
-                result['method'] = f'proxy_alt'
-                result['proxy_used'] = test_url
-                
-                is_valid, attempt_result = self._attempt_check(test_url)
-                result['attempts'].append(attempt_result)
-                
-                if is_valid:
-                    self.stats['proxy_used'] += 1
-                    return True, result
+                self.stats['proxy_failed'] += 1
         
         # 所有策略都失敗
-        result['status'] = False
+        result['valid'] = False
+        if not result.get('error'):
+            result['error'] = "所有訪問方式均失敗（raw、原始、代理）"
         return False, result
     
     def _check_normal_url(self, url: str, result: Dict) -> Tuple[bool, Dict]:
         """檢查一般 URL"""
+        result['method'] = 'direct'
+        result['url_used'] = url
+        
         is_valid, attempt_result = self._attempt_check(url)
         result['attempts'].append(attempt_result)
-        result['method'] = 'direct'
         
         if is_valid:
+            result['valid'] = True
             return True, result
         else:
-            result['status'] = False
+            result['valid'] = False
+            result['error'] = attempt_result.get('error', '訪問失敗')
             return False, result
     
     def _attempt_check(self, url: str) -> Tuple[bool, Dict]:
-        """執行單次檢查嘗試"""
+        """
+        執行單次檢查嘗試
+        """
         attempt_result = {
-            'url': url,
+            'url_used': url,
             'success': False,
             'status_code': None,
             'response_time': None,
             'error': None,
-            'content_preview': None
+            'content_preview': None,
+            'content_type': None,
+            'content_length': 0,
+            'attempt_number': 0,
+        }
+        
+        headers = {
+            **self.base_headers,
+            "User-Agent": random.choice(USER_AGENTS),
         }
         
         for attempt in range(RETRY):
+            attempt_result['attempt_number'] = attempt + 1
+            self.stats['total_attempts'] += 1
+            
             try:
                 start_time = time.time()
                 
@@ -316,19 +361,16 @@ class SmartURLChecker:
                         url,
                         timeout=TIMEOUT,
                         allow_redirects=True,
-                        headers={
-                            "Accept": "*/*",
-                            "Accept-Encoding": "gzip, deflate",
-                            "Connection": "keep-alive",
-                            "Cache-Control": "no-cache"
-                        }
+                        headers=headers
                     )
                     
-                    # HEAD 成功且狀態碼正常
                     if response.status_code < 400:
-                        # 對於 GitHub raw 內容，HEAD 可能成功但內容可能不完整
-                        # 所以我們還是要驗證內容
-                        pass
+                        # HEAD 成功，記錄資訊
+                        attempt_result['status_code'] = response.status_code
+                        attempt_result['content_type'] = response.headers.get('content-type', '')
+                        content_length = response.headers.get('content-length')
+                        if content_length:
+                            attempt_result['content_length'] = int(content_length)
                     else:
                         # HEAD 失敗，嘗試 GET
                         response = self.session.get(
@@ -336,40 +378,45 @@ class SmartURLChecker:
                             timeout=TIMEOUT,
                             allow_redirects=True,
                             stream=True,
-                            headers={
-                                "Accept": "*/*",
-                                "Accept-Encoding": "gzip, deflate",
-                                "Connection": "keep-alive"
-                            }
+                            headers=headers
                         )
-                except:
-                    # HEAD 出錯，直接使用 GET
+                except Exception:
+                    # HEAD 出錯，使用 GET
+                    if attempt > 0:
+                        time.sleep(0.5 * attempt)
+                    
                     response = self.session.get(
                         url,
                         timeout=TIMEOUT,
                         allow_redirects=True,
                         stream=True,
-                        headers={
-                            "Accept": "*/*",
-                            "Accept-Encoding": "gzip, deflate",
-                            "Connection": "keep-alive"
-                        }
+                        headers=headers
                     )
                 
                 response_time = time.time() - start_time
                 attempt_result['response_time'] = round(response_time, 3)
                 attempt_result['status_code'] = response.status_code
+                attempt_result['content_type'] = response.headers.get('content-type', '')
                 
                 # 檢查狀態碼
                 if response.status_code >= 400:
                     attempt_result['error'] = f"HTTP {response.status_code}"
+                    if response.status_code == 429:
+                        time.sleep(2 * (attempt + 1))
                     continue
                 
-                # 讀取部分內容進行驗證
+                # 檢查 Content-Length
+                content_length = response.headers.get('content-length')
+                if content_length:
+                    attempt_result['content_length'] = int(content_length)
+                    if attempt_result['content_length'] == 0:
+                        attempt_result['error'] = "內容長度為 0"
+                        continue
+                
+                # 讀取部分內容
                 content = ""
                 try:
-                    # 對於 JSON 文件，讀取更多內容
-                    content_limit = 8192 if url.endswith('.json') else 2048
+                    content_limit = 8192 if url.endswith('.json') else 4096
                     for chunk in response.iter_content(chunk_size=1024):
                         if chunk:
                             content += chunk.decode('utf-8', errors='ignore')
@@ -382,7 +429,7 @@ class SmartURLChecker:
                 attempt_result['content_preview'] = content[:200]
                 
                 # 驗證內容
-                is_valid = self._validate_github_content(url, content)
+                is_valid = self._validate_content(url, content)
                 if is_valid:
                     attempt_result['success'] = True
                     return True, attempt_result
@@ -393,106 +440,112 @@ class SmartURLChecker:
             except requests.exceptions.Timeout:
                 attempt_result['error'] = "超時"
                 if attempt < RETRY - 1:
-                    time.sleep(1 * (attempt + 1))  # 指數退避
+                    time.sleep(1 * (attempt + 1))
                 continue
                 
             except requests.exceptions.ConnectionError:
                 attempt_result['error'] = "連線錯誤"
                 if attempt < RETRY - 1:
-                    time.sleep(1 * (attempt + 1))
+                    time.sleep(0.5 * (attempt + 1))
                 continue
                 
             except requests.exceptions.SSLError:
                 attempt_result['error'] = "SSL 錯誤"
-                # 嘗試忽略 SSL 驗證
-                try:
-                    response = self.session.get(
-                        url,
-                        timeout=TIMEOUT,
-                        verify=False,
-                        allow_redirects=True
-                    )
-                    if response.status_code < 400:
-                        attempt_result['success'] = True
-                        attempt_result['error'] = "SSL 驗證失敗但內容可存取"
-                        return True, attempt_result
-                except:
-                    pass
+                if attempt == 0:
+                    try:
+                        response = self.session.get(
+                            url,
+                            timeout=TIMEOUT,
+                            verify=False,
+                            allow_redirects=True,
+                            headers=headers
+                        )
+                        if response.status_code < 400:
+                            attempt_result['success'] = True
+                            attempt_result['error'] = "SSL 驗證失敗但內容可存取"
+                            return True, attempt_result
+                    except:
+                        pass
                 continue
                 
             except Exception as e:
                 attempt_result['error'] = str(e)[:50]
+                if attempt < RETRY - 1:
+                    time.sleep(0.5 * (attempt + 1))
                 continue
         
         return False, attempt_result
     
-    def _validate_github_content(self, url: str, content: str) -> bool:
-        """驗證 GitHub 內容"""
+    def _validate_content(self, url: str, content: str) -> bool:
+        """驗證內容"""
         if not content or len(content.strip()) < 10:
             return False
         
         content_lower = content.lower()
         
-        # 檢查是否為錯誤頁面
+        # 檢查錯誤頁面
         error_patterns = [
-            '404: not found',
-            '404 not found',
-            'raw.githubusercontent.com' in content_lower and '404' in content_lower,
-            'github' in content_lower and 'not found' in content_lower,
-            'access denied',
-            'forbidden',
-            'rate limit',
-            'too many requests',
-            '<html',
-            '<!doctype html'
+            '404: not found', '404 not found',
+            'access denied', 'forbidden',
+            'rate limit', 'too many requests',
+            '<html', '<!doctype html',
+            'nginx', 'apache',
+            'error occurred', 'internal server error',
+            'service unavailable', 'bad gateway'
         ]
         
-        if any(pattern if isinstance(pattern, bool) else pattern in content_lower for pattern in error_patterns):
-            return False
-        
-        # 如果是 JSON 文件，驗證 JSON 格式
-        if url.endswith('.json'):
-            try:
-                data = json.loads(content)
-                # 檢查是否為有效的 TVBox 配置
-                if isinstance(data, dict):
-                    # 檢查是否有 TVBox 的關鍵欄位
-                    tvbox_fields = ['spider', 'sites', 'lives', 'parses']
-                    has_tvbox_fields = any(field in data for field in tvbox_fields)
-                    if has_tvbox_fields:
-                        return True
-                    # 如果沒有標準欄位，但內容不為空，也視為有效
-                    return len(data) > 0
-                return True
-            except:
+        for pattern in error_patterns:
+            if pattern in content_lower:
                 return False
         
-        # 如果是 M3U 文件
-        if url.endswith(('.m3u', '.m3u8')):
+        # 根據檔案類型驗證
+        url_lower = url.lower()
+        
+        # JSON 驗證
+        if url_lower.endswith('.json'):
+            try:
+                data = json.loads(content)
+                if isinstance(data, dict):
+                    tvbox_fields = ['spider', 'sites', 'lives', 'parses']
+                    has_fields = any(f in data for f in tvbox_fields)
+                    return has_fields or len(data) > 0
+                elif isinstance(data, list):
+                    return len(data) > 0
+                return False
+            except json.JSONDecodeError:
+                return False
+        
+        # M3U 驗證
+        if url_lower.endswith(('.m3u', '.m3u8')):
             return '#EXTM3U' in content.upper()
         
-        # 一般文本文件
+        # XML 驗證
+        if url_lower.endswith('.xml'):
+            return ('<?xml' in content_lower or 
+                    '<tv' in content_lower or 
+                    '<rss' in content_lower)
+        
+        # TXT 驗證
+        if url_lower.endswith('.txt'):
+            lines = [l.strip() for l in content.splitlines() if l.strip()]
+            if len(lines) < 2:
+                return False
+            url_pattern = re.compile(r'https?://[^\s<>"\']+')
+            urls = url_pattern.findall(content)
+            return len(urls) > 0 or len(lines) > 3
+        
+        # 通用驗證
+        url_pattern = re.compile(r'https?://[^\s<>"\']+')
+        urls = url_pattern.findall(content)
+        
+        tvbox_keywords = ['tvbox', 'catvod', '影视', '直播', '接口', 'spider', 'parse']
+        has_tvbox_keyword = any(keyword in content_lower for keyword in tvbox_keywords)
+        
+        if has_tvbox_keyword or len(urls) > 3:
+            return True
+        
         lines = [l.strip() for l in content.splitlines() if l.strip()]
-        return len(lines) > 2
-    
-    def _extract_original_github_url(self, url: str) -> Optional[str]:
-        """從代理 URL 中提取原始 GitHub URL"""
-        # 如果是代理 URL，嘗試提取原始 URL
-        for proxy in GITHUB_PROXIES:
-            if url.startswith(proxy):
-                # 移除代理前綴
-                remaining = url[len(proxy):]
-                # 檢查是否以 https:// 開頭
-                if remaining.startswith('/https://'):
-                    return remaining[1:]  # 移除開頭的 /
-                elif remaining.startswith('https://'):
-                    return remaining
-        
-        # 如果已經是原始 GitHub URL
-        if 'github.com' in url or 'raw.githubusercontent.com' in url:
-            return url
-        
-        return None
+        return len(lines) >= 3
     
     def clear_cache(self):
         """清除快取"""
@@ -511,33 +564,42 @@ class TVBoxChecker:
         self.valid = 0
         self.invalid = 0
         self.duplicate = 0
+        self.empty_lines = 0
+        self.no_url_lines = 0
         self.seen = set()
         self.invalid_urls = []
         self.duplicate_urls = []
-        self.url_details = {}  # 儲存詳細資訊
-        self.proxy_stats = {}
+        self.url_details = {}
+        self.method_stats = {}
         
-        # URL 模式
         self.url_pattern = re.compile(r'https?://[^\s<>"\']+')
 
     def load_lines(self) -> List[str]:
-        """載入輸入檔案"""
         p = Path(INPUT_FILE)
         if not p.exists():
             raise FileNotFoundError(f"找不到檔案: {INPUT_FILE}")
         return p.read_text(encoding='utf-8', errors='ignore').splitlines()
 
-    def save_lines(self, lines: List[str]):
-        """儲存輸出檔案（去除空白行和無網址行）"""
+    def save_lines(self, lines: List[str]) -> List[str]:
         output_path = Path(OUTPUT_FILE)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # 過濾空白行和無網址行
+        if output_path.exists():
+            history_path = Path("data/history")
+            history_path.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            shutil.copy2(output_path, history_path / f"backup_{ts}.txt")
+        
         filtered = []
         for line in lines:
             stripped = line.strip()
-            if stripped and self.url_pattern.search(stripped):
-                filtered.append(line)
+            if not stripped:
+                self.empty_lines += 1
+                continue
+            if not self.url_pattern.search(stripped):
+                self.no_url_lines += 1
+                continue
+            filtered.append(line)
         
         output_path.write_text('\n'.join(filtered), encoding='utf-8')
         return filtered
@@ -555,11 +617,9 @@ class TVBoxChecker:
             )
 
     def extract_urls(self, line: str) -> List[str]:
-        """從行中提取所有 URL"""
         return self.url_pattern.findall(line)
 
     def is_duplicate(self, url: str) -> bool:
-        """檢查 URL 是否重複"""
         if url in self.seen:
             self.duplicate += 1
             self.duplicate_urls.append(url)
@@ -568,21 +628,18 @@ class TVBoxChecker:
         return False
 
     def check_all(self):
-        """執行完整檢查"""
         lines = self.load_lines()
         cleaned_lines = []
         tasks = []
 
         print(f"📂 載入 {len(lines)} 行資料")
-        print(f"🔍 開始智慧型檢查...")
-        print(f"📡 GitHub 代理服務: {len(GITHUB_PROXIES)} 個")
+        print(f"🔍 開始智慧型檢查（源地址優先）...")
+        print(f"📡 GitHub 代理服務: {len(GITHUB_PROXIES)} 個（備用）")
         print("-" * 60)
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # 提交所有任務
             for line in lines:
                 urls = self.extract_urls(line)
-                
                 if not urls:
                     cleaned_lines.append(line)
                     continue
@@ -592,7 +649,6 @@ class TVBoxChecker:
 
                 for url in urls:
                     self.total += 1
-                    
                     if self.is_duplicate(url):
                         newline = newline.replace(url, "")
                         continue
@@ -602,30 +658,26 @@ class TVBoxChecker:
 
                 tasks.append((newline, futures))
 
-            # 收集結果
             for idx, (newline, futures) in enumerate(tasks):
                 for future, url in futures:
                     try:
-                        is_valid, details = future.result(timeout=TIMEOUT + 5)
+                        is_valid, details = future.result(timeout=TIMEOUT + 10)
                         
-                        # 儲存詳細資訊
                         self.url_details[url] = details
                         
                         if is_valid:
                             self.valid += 1
-                            # 統計代理使用情況
                             method = details.get('method', 'unknown')
-                            self.proxy_stats[method] = self.proxy_stats.get(method, 0) + 1
+                            self.method_stats[method] = self.method_stats.get(method, 0) + 1
                         else:
                             self.invalid += 1
                             self.invalid_urls.append(url)
                             newline = newline.replace(url, "")
                             
-                            # 顯示失敗原因（調試用）
-                            if self.invalid <= 10:  # 只顯示前 10 個
+                            if self.invalid <= 10:
                                 error = details.get('error', '未知錯誤')
-                                attempts = len(details.get('attempts', []))
-                                print(f"  ⚠️ {url[:60]}... - {error} (嘗試 {attempts} 次)")
+                                url_used = details.get('url_used', url)
+                                print(f"  ⚠️ {url[:60]}... - {error}")
                     except Exception as e:
                         self.invalid += 1
                         self.invalid_urls.append(url)
@@ -634,24 +686,21 @@ class TVBoxChecker:
                 
                 cleaned_lines.append(newline)
                 
-                # 顯示進度
                 if (idx + 1) % 10 == 0:
                     progress = (idx + 1) / len(tasks) * 100
                     print(f"  進度: {progress:.1f}% ({idx + 1}/{len(tasks)})")
 
-        # 儲存結果
         print(f"\n💾 儲存結果...")
         final_lines = self.save_lines(cleaned_lines)
         self.save_invalid()
         self.save_duplicate()
-        
-        # 生成報告
         self.generate_report(final_lines)
 
     def generate_report(self, final_lines: List[str]):
-        """生成詳細報告"""
+        checker_stats = self.checker.stats
+        
         lines = [
-            "# 📊 TVBox URL 檢查報告（網路優化版）",
+            "# 📊 TVBox URL 檢查報告（源地址優先版）",
             "",
             "## 📈 統計摘要",
             "",
@@ -662,37 +711,36 @@ class TVBoxChecker:
             f"| ❌ 失效 | {self.invalid} | {(self.invalid/self.total*100):.1f}%" if self.total > 0 else "| ❌ 失效 | 0 | 0% |",
             f"| 🔄 重複 | {self.duplicate} | {(self.duplicate/self.total*100):.1f}%" if self.total > 0 else "| 🔄 重複 | 0 | 0% |",
             "",
-            "## 🌐 網路策略統計",
+            "## 🌐 訪問方式統計",
             "",
         ]
         
-        # 添加網路策略統計
-        for method, count in self.proxy_stats.items():
-            method_name = {
-                'proxy': '代理服務',
-                'direct': '直接連接',
-                'proxy_alt': '備用代理'
-            }.get(method, method)
-            lines.append(f"- **{method_name}**：{count} 個")
+        method_names = {
+            'raw': 'GitHub Raw (優先)',
+            'original': '原始 URL',
+            'proxy': '代理服務 (備用)',
+            'direct': '直接連接'
+        }
         
-        # 添加代理管理器統計
-        lines.extend([
-            "",
-            "## 📡 GitHub 代理狀態",
-            "",
-        ])
-        
-        healthy_proxies = self.checker.proxy_manager._get_healthy_proxies()
-        for proxy in GITHUB_PROXIES:
-            status = "✅ 健康" if proxy in healthy_proxies else "❌ 不可用"
-            lines.append(f"- {proxy}：{status}")
+        for method, count in self.method_stats.items():
+            name = method_names.get(method, method)
+            lines.append(f"- **{name}**：{count} 個")
         
         lines.extend([
             "",
-            "## 📋 詳細統計",
+            "## 📡 檢查器統計",
             "",
+            f"- **快取命中**：{checker_stats.get('cache_hit', 0)} 次",
+            f"- **Raw 成功**：{checker_stats.get('raw_success', 0)} 次",
+            f"- **Raw 失敗**：{checker_stats.get('raw_failed', 0)} 次",
+            f"- **代理成功**：{checker_stats.get('proxy_success', 0)} 次",
+            f"- **代理失敗**：{checker_stats.get('proxy_failed', 0)} 次",
+            "",
+            "## 🧹 清理統計",
+            "",
+            f"- **移除空白行**：{self.empty_lines} 行",
+            f"- **移除無網址行**：{self.no_url_lines} 行",
             f"- **保留行數**：{len(final_lines)} 行",
-            f"- **移除行數**：{self.total - len(final_lines)} 行",
             "",
             "## 📋 無效網址列表",
             "",
@@ -700,10 +748,10 @@ class TVBoxChecker:
         
         if self.invalid_urls:
             for url in self.invalid_urls[:20]:
-                # 嘗試獲取失敗原因
                 details = self.url_details.get(url, {})
                 error = details.get('error', '未知原因')
-                lines.append(f"- `{url}` - {error}")
+                method = details.get('method', '未知')
+                lines.append(f"- `{url}` - {error} (方式: {method})")
             if len(self.invalid_urls) > 20:
                 lines.append(f"- ... 還有 {len(self.invalid_urls) - 20} 個")
         else:
@@ -714,7 +762,7 @@ class TVBoxChecker:
             "---",
             f"🕐 更新時間：{time.strftime('%Y-%m-%d %H:%M:%S')}",
             "",
-            "✅ 報告由 TVBox URL Checker Pro v3 (網路優化版) 自動生成"
+            "✅ 報告由 TVBox URL Checker Pro v3 (源地址優先版) 自動生成"
         ])
         
         Path(REPORT_FILE).write_text('\n'.join(lines), encoding='utf-8')
@@ -726,7 +774,7 @@ class TVBoxChecker:
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("🚀 TVBox URL Checker Pro v3 - 網路優化版")
+    print("🚀 TVBox URL Checker Pro v3 - 源地址優先版")
     print("=" * 70)
     
     start_time = time.time()
@@ -744,6 +792,10 @@ if __name__ == "__main__":
         print(f"🔄 重複   : {checker.duplicate}")
         print(f"⏱️ 耗時   : {time.time() - start_time:.2f} 秒")
         print("=" * 70)
+        
+        print(f"\n📦 快取命中: {checker.checker.stats['cache_hit']} 次")
+        print(f"🌐 Raw 成功: {checker.checker.stats['raw_success']} 次")
+        print(f"🔄 代理成功: {checker.checker.stats['proxy_success']} 次")
         
     except KeyboardInterrupt:
         print("\n\n⚠️ 使用者中斷執行")
