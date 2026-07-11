@@ -493,3 +493,10 @@ https://7337.kstore.space/%E4%B8%83%E6%98%9F%E6%88%8F%E6%9B%B2/api.json
 百度云：https://pan.baidu.com/s/1RlYqlAzjDRQKBJAY7n8V_g?pwd=zone 提取码:zone
 UC盘链接：https://drive.uc.cn/s/9b06cfa319864?public=1
 夸克网盘：https://pan.quark.cn/s/2cf9f8494180
+不好意思点播：https://raw.githubusercontent.com/wwb521/live/main/video.json
+不好意思点播：https://raw.githubusercontent.com/bizhangjie/CatVodSpider/refs/heads/main/json/index18.json
+不好意思点播：https://clun.top/fun.json
+榴芒电视:http://8.138.7.223/tv.txt
+不好意思点播：https://raw.githubusercontent.com/torysuper/IPTV-P/refs/heads/Files/Adult.m3u
+不好意思点播：https://gzy.lzo.publicvm.com 
+
