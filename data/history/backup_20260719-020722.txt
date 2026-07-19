@@ -24,6 +24,8 @@
 VOX接口：http://rihou.cc:88/demo.php
 摸鱼接口：https://6800.kstore.vip/fish.json
 二小接口：http://tvbox.王二小放牛娃.top/
+通用接口：https://catbox.n13.club/jk/jsm.json
+t4接口：https://catbox.n13.club/jk/t4.json
 阅读书源：http://yuedu.miaogongzi.net/gx.html
 https://9280.kstore.vip/cat/index.js.md5
 http://www.饭太硬.net/tvhttp://fty.xxooo.cf/tv
@@ -111,6 +113,7 @@ http://wexfnw:wexfnw@cat.999888987.xyz/index.js.md5
 http://wexfnw:wexfnw@cat.999888123.xyz/index.js.md5
 https://9280.kstore.space/cat/index.js.md5
 http://hb.小虎斑.site:25252/仅供测试/
+http://mitvbox.xyz/%E5%B0%8F%E7%B1%B3/DEMO.json
 https://ghproxy.net/https://raw.githubusercontent.com/yoursmile66/TVBox/main/XC.json
 https://ghfast.top/https://raw.githubusercontent.com/yigedashu/xwck/refs/heads/main/lrzy/api.json
 https://proxy.v2gh.com/https://raw.githubusercontent.com/yigedashu/xwck/refs/heads/main/lrzy/api.json
@@ -138,6 +141,7 @@ https://12586.kstore.space/123.txt
 Pyramid： https://ghproxy.com/raw.githubusercontent.com/lm317379829/PyramidStore/pyramid/py.json
 http://xn--z7x900a.live/
 [ ] 戏曲接口：http://mzrjk.top/戏曲
+[ ] 学习接口：http://mzrjk.top/学习
 [ ] 音乐接口：http://mzrjk.top/音乐
 https://raw.githubusercontent.com/UndCover/PyramidStore/main/py.json
 https://pastebin.com/raw/sbPpDm9G
@@ -368,6 +372,7 @@ https://ghproxy.liuzhicong.com/https://raw.githubusercontent.com/xmbjm/ck/main/c
 https://github.moeyy.xyz/https://raw.githubusercontent.com/xmbjm/ck/main/ck.json
 https://gh.llkk.cc/https://raw.githubusercontent.com/xmbjm/ck/main/ck.json
 https://github.ednovas.xyz/https://raw.githubusercontent.com/PizazzGY/TVBox/main/api.json
+（10） http://api.btstu.cn/sjbz/?lx=suiji
 高天：https://github.moeyy.xyz/https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json
 宝盒vip专享 - https://ghp.ci/https://raw.githubusercontent.com/guot55/YGBH/main/vip2.json (秒播)
 https://ghp.ci/https://raw.githubusercontent.com/guot55/YGBH/main/box.json

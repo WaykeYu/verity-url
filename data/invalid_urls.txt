@@ -1,11 +1,5 @@
-http://tv.4kbox.top/4k/index.php
-http://tv.weidonglong.com/ysc5.json
-http://mzjk.top/禁止贩卖
-http://mzjk.top/DC
-https://try.gitea.io/xcxc8/mytv/raw/branch/main/TV.jsonxcxc8
-http://mzjk.top/禁止贩卖1
-http://zb.gjds.love/公众号搞机大师/gaoji.json
-https://slink.ltd/https://raw.githubusercontent.com/bestpvp/source/refs/heads/main/py/cntv央视.py
-https://slink.ltd/https://raw.githubusercontent.com/bestpvp/source/refs/heads/main/py/py_电影猎手.py
-https://slink.ltd/https://raw.githubusercontent.com/bestpvp/source/refs/heads/main/py/光速.py
-https://8.163.122.228/gy/%E5%85%AC%E7%9B%8A/V3m.json
+https://catbox.n13.club/jk/jsm.json
+https://catbox.n13.club/jk/t4.json
+http://mitvbox.xyz/%E5%B0%8F%E7%B1%B3/DEMO.json
+http://mzrjk.top/学习
+http://api.btstu.cn/sjbz/?lx=suiji
